@@ -43,17 +43,17 @@ export const chartOutputSchema = z
 
 const chartAgent = () => {
   const openai = new OpenAI({
-    apiKey: process.env.GEMINI_API_KEY,
-    baseURL: process.env.GEMINI_API_BASE_URL,
+    apiKey: process.env.OPENROUTER_API_KEY,
+    baseURL: process.env.OPENROUTER_API_BASE_URL,
   });
 
-  const modelFlash20 = new OpenAIChatCompletionsModel(
+  const modelSonnet = new OpenAIChatCompletionsModel(
     openai,
-    "gemini-2.0-flash"
+    "anthropic/claude-3.5-sonnet"
   );
 
   return new Agent({
-    model: modelFlash20,
+    model: modelSonnet,
     name: "Chart Generator",
     instructions: chart_system_prompt,
     outputType: chartOutputSchema,

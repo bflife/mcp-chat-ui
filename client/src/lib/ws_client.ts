@@ -19,7 +19,7 @@ const WS_URL =
     : `ws://${location.host.split(":")[0]}:3000/client-ws`;
 
 export class WebSocketSessionClient {
-  public model = "gemini-2.5-flash";
+  public model = "anthropic/claude-3.5-sonnet";
   public googleIdToken: string;
   public sessionId = "ws-" + Math.random().toString(36).substring(2, 15);
   public connected: boolean = false;

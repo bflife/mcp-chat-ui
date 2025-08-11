@@ -6,7 +6,7 @@ https://github.com/user-attachments/assets/ce39f244-9d77-4d29-b6e2-1119063653b8
 
 ## Agent & LLM Integration
 
-Agents are run using the **OpenAI Agents SDK** for seamless integration with MCP. The current implementation uses **Gemini LLM** for agent responses, but you can easily switch to OpenAI LLM by updating the agent configuration. This flexibility allows you to experiment with different large language models as needed.
+Agents are run using the **OpenAI Agents SDK** for seamless integration with MCP. The current implementation uses **OpenRouter** to access various LLMs for agent responses. OpenRouter provides access to multiple AI models including OpenAI, Anthropic, Google, and many others through a unified API. This flexibility allows you to experiment with different large language models as needed.
 
 ## Features
 
@@ -31,7 +31,7 @@ Agents are run using the **OpenAI Agents SDK** for seamless integration with MCP
    ```bash
    cp .env.template .env
    ```
-2. Set your `GEMINI_API_KEY` in the `.env` file to enable Gemini LLM features.
+2. Set your `OPENROUTER_API_KEY` in the `.env` file to enable OpenRouter LLM features. You can get your API key from [OpenRouter](https://openrouter.ai/).
 3. (Optional) Set `GOOGLE_CLIENT_ID` in `.env` to enable Google authentication for the chat UI.
 
 ### Install Dependencies

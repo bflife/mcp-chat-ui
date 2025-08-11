@@ -8,7 +8,7 @@ import {
   setTracingDisabled,
   UserMessageItem,
 } from "@openai/agents";
-import { GoogleGenerativeAI } from "@google/generative-ai";
+
 
 setTracingDisabled(true);
 
@@ -74,15 +74,11 @@ export class AgentsHelper {
     input: string
   ): Promise<number> {
     try {
-      const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
-      const gptModel = genAI.getGenerativeModel({ model });
-      if (!gptModel) {
-        console.error(`Model ${model} not found`);
-        return 0;
-      }
-      const tokenCount = await gptModel.countTokens(input);
-      console.log(`Token count for model ${model}:`, tokenCount);
-      return tokenCount.totalTokens;
+      // OpenRouter doesn't provide a direct token counting API like Google
+      // Using a simple approximation: ~4 characters per token for most models
+      const approximateTokens = Math.ceil(input.length / 4);
+      console.log(`Approximate token count for model ${model}:`, approximateTokens);
+      return approximateTokens;
     } catch (error) {
       console.error("Error occurred while calculating token count:", error);
       return 0;

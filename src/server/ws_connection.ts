@@ -275,10 +275,10 @@ export class WebSocketConnection {
   }
 
   private async verifyAuth(data: WebSocketMessage) {
-    if (!process.env.GEMINI_API_KEY) {
+    if (!process.env.OPENROUTER_API_KEY) {
       this.sendMessage({
         error:
-          "Gemini API Key is not set. Update .env file to have GEMINI_API_KEY=[YOUR_API_KEY]",
+          "OpenRouter API Key is not set. Update .env file to have OPENROUTER_API_KEY=[YOUR_API_KEY]",
       });
       return false;
     }

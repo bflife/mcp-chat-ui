@@ -65,22 +65,22 @@ export class ChatSession {
     public updatedAt: Date = new Date(),
 
     public openai = new OpenAI({
-      apiKey: process.env.GEMINI_API_KEY,
-      baseURL: process.env.GEMINI_API_BASE_URL,
+      apiKey: process.env.OPENROUTER_API_KEY,
+      baseURL: process.env.OPENROUTER_API_BASE_URL,
     }),
 
-    public modelFlash20 = new OpenAIChatCompletionsModel(
+    public modelSonnet = new OpenAIChatCompletionsModel(
       openai,
-      "gemini-2.0-flash"
+      "anthropic/claude-3.5-sonnet"
     ),
 
-    public modelFlash25 = new OpenAIChatCompletionsModel(
+    public modelGPT4o = new OpenAIChatCompletionsModel(
       openai,
-      "gemini-2.5-flash"
+      "openai/gpt-4o"
     ),
 
     public codingAgent = new Agent({
-      model: modelFlash25,
+      model: modelSonnet,
       name: "Coding AI Agent",
       instructions: codingAgentInstructions,
       handoffDescription:
@@ -88,7 +88,7 @@ export class ChatSession {
     }),
 
     public genericAgent = new Agent({
-      model: modelFlash25,
+      model: modelSonnet,
       name: "Generic AI Agent",
       instructions: SystemPrompt.replace(/\%\%NOW\%\%/gi, now()),
       mcpServers: ([myMCPServer] as MCPServer[]).concat(
