@@ -7,6 +7,8 @@ export interface ProfileState {
   email: string;
   picture: string;
   googleIdToken: string;
+  accessToken: string;
+  authType: "google" | "password" | "none";
   noAuth: boolean;
 }
 
@@ -15,7 +17,9 @@ const initialState: ProfileState = {
   email: "",
   picture: "",
   googleIdToken: "",
-  noAuth: Config.GOOGLE_CLIENT_ID ? false : true,
+  accessToken: "",
+  authType: "none",
+  noAuth: Config.GOOGLE_CLIENT_ID || Config.LOGIN_ENABLED ? false : true,
 };
 
 const profileSlice = createSlice({
@@ -27,6 +31,18 @@ const profileSlice = createSlice({
       state.email = action.payload.email;
       state.picture = action.payload.picture;
       state.googleIdToken = action.payload.googleIdToken;
+      state.accessToken = action.payload.accessToken;
+      state.authType = action.payload.authType;
+      state.noAuth = action.payload.noAuth;
+    },
+    clearProfile(state) {
+      state.name = "";
+      state.email = "";
+      state.picture = "";
+      state.googleIdToken = "";
+      state.accessToken = "";
+      state.authType = "none";
+      state.noAuth = Config.GOOGLE_CLIENT_ID || Config.LOGIN_ENABLED ? false : true;
     },
     setName(state, action: PayloadAction<string>) {
       state.name = action.payload;
@@ -37,5 +53,5 @@ const profileSlice = createSlice({
   },
 });
 
-export const { setProfile, setName, setEmail } = profileSlice.actions;
+export const { setProfile, clearProfile, setName, setEmail } = profileSlice.actions;
 export default profileSlice.reducer;

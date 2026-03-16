@@ -6,7 +6,7 @@ https://github.com/user-attachments/assets/ce39f244-9d77-4d29-b6e2-1119063653b8
 
 ## Agent & LLM Integration
 
-Agents are run using the **OpenAI Agents SDK** for seamless integration with MCP. The current implementation uses **OpenRouter** to access various LLMs for agent responses. OpenRouter provides access to multiple AI models including OpenAI, Anthropic, Google, and many others through a unified API. This flexibility allows you to experiment with different large language models as needed.
+Agents are run using the **OpenAI Agents SDK** for seamless integration with MCP. The project now supports **Ollama-first** deployment by default, while still allowing **OpenRouter** as an optional provider. With Ollama, you can run local models behind an OpenAI-compatible API endpoint, which is a strong fit for private FastMCP gateway workflows and local development. If needed, OpenRouter can still be enabled for access to hosted models through a unified API.
 
 ## Features
 
@@ -31,8 +31,13 @@ Agents are run using the **OpenAI Agents SDK** for seamless integration with MCP
    ```bash
    cp .env.template .env
    ```
-2. Set your `OPENROUTER_API_KEY` in the `.env` file to enable OpenRouter LLM features. You can get your API key from [OpenRouter](https://openrouter.ai/).
-3. (Optional) Set `GOOGLE_CLIENT_ID` in `.env` to enable Google authentication for the chat UI.
+2. By default, configure Ollama in `.env`:
+   - `LLM_PROVIDER=ollama`
+   - `OLLAMA_BASE_URL=http://127.0.0.1:11434/v1`
+   - `DEFAULT_MODEL=ollama/llama3.1`
+3. If you prefer hosted models instead, set `LLM_PROVIDER=openrouter` and provide `OPENROUTER_API_KEY`. You can get your API key from [OpenRouter](https://openrouter.ai/).
+4. (Optional) Set `GOOGLE_CLIENT_ID` in `.env` to enable Google authentication for the chat UI.
+5. (Optional) Set `LOGIN_ENABLED=true` and `LOGIN_API_URL=...` to enable the password login page.
 
 ### Install Dependencies
 
@@ -47,6 +52,18 @@ npm install
 npm run install_all
 
 ```
+
+### Ollama Quick Start
+
+```bash
+# Start Ollama locally first
+ollama serve
+
+# Example model pull
+ollama pull llama3.1
+```
+
+Then keep the default `.env` values for `LLM_PROVIDER`, `OLLAMA_BASE_URL`, and `DEFAULT_MODEL`.
 
 ### Run Development Server
 
@@ -63,6 +80,57 @@ open http://localhost:5173/
 npm run start
 open http://localhost:3000/
 ```
+
+## Docker Deployment
+
+### Deployment option 1: connect to a host Ollama service
+
+This is the recommended deployment mode when Ollama is already running on the host or another machine.
+
+1. Copy environment file:
+   ```bash
+   cp .env.template .env
+   ```
+2. Set at least:
+   ```env
+   NODE_ENV=production
+   LLM_PROVIDER=ollama
+   DEFAULT_MODEL=ollama/llama3.1
+   OLLAMA_BASE_URL=http://host.docker.internal:11434/v1
+   LOGIN_ENABLED=true
+   LOGIN_API_URL=http://your-auth-service/api/v1/auth/login
+   BACKEND_URL=http://localhost:3000
+   FRONTEND_URL=http://localhost:3000
+   ```
+3. Start container:
+   ```bash
+   docker compose up -d --build
+   ```
+4. Open:
+   ```text
+   http://localhost:3000
+   ```
+
+### Deployment option 2: connect to remote Ollama
+
+If Ollama runs on another server, set:
+
+```env
+OLLAMA_BASE_URL=http://YOUR_OLLAMA_HOST:11434/v1
+```
+
+Then run:
+
+```bash
+docker compose up -d --build
+```
+
+### Notes
+
+- The app container exposes port `3000`.
+- The current compose file assumes your auth API is external.
+- If you use Linux and `host.docker.internal` is unavailable, replace it with the host IP or add an `extra_hosts` mapping.
+- You can still switch to OpenRouter by setting `LLM_PROVIDER=openrouter` and providing `OPENROUTER_API_KEY`.
 
 ### Inspect MCP Server
 

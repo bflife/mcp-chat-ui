@@ -7,7 +7,10 @@ import moment from "moment-timezone";
 import { parseJSON } from "../utils";
 import { AgentsHelper } from "../utils/agents_helper";
 import { AgentInputItem } from "@openai/agents";
-import { EXTERNAL_MCP_SERVERS_CONFIG } from "../utils/external_mcp";
+import {
+  EXTERNAL_MCP_SERVERS_CONFIG,
+  listExternalMcpServerDiagnostics,
+} from "../utils/external_mcp";
 import fs from "fs";
 
 const DEBUG = false;
@@ -18,6 +21,7 @@ interface WebSocketMessage {
   prompt: string;
   model: string;
   id_token?: string;
+  access_token?: string;
   mcpServers?: string[];
 }
 
@@ -38,30 +42,29 @@ export class WebSocketConnection {
     console.log("WebSocket client connected");
 
     this.active = true;
-    // this.session = new ChatSession();
     this.user = {} as TokenPayload;
-
     this.toolCallId = "";
 
-    this.sendMessage({
-      type: "config",
-      config: {
-        mcpServers: EXTERNAL_MCP_SERVERS_CONFIG,
-      },
-    });
-    const allEvents = [] as any;
+    this.sendConfig();
+    const allEvents = [] as any[];
+
     this.ws.on("message", async (message) => {
       let data: WebSocketMessage;
 
       try {
         data = JSON.parse(message.toString());
-      } catch (e) {
+      } catch {
         this.sendMessage({ error: "Invalid JSON" });
         return;
       }
 
       if (data.type === "ping") {
         this.sendMessage({ type: "pong", session_id: data.session_id });
+        return;
+      }
+
+      if (data.type === "mcp-diagnostics") {
+        await this.handleMcpDiagnostics(data);
         return;
       }
 
@@ -78,13 +81,15 @@ export class WebSocketConnection {
           });
 
           this.session.sessionId = data.session_id;
+          this.session.setAccessToken(data.access_token || "");
+          this.session.setModel(data.model);
           let fullOutput = "";
-
           const input = this.generateInput(data);
-
           const stream = await this.session.startStream(
             input,
-            data.mcpServers || []
+            data.mcpServers || [],
+            data.access_token || "",
+            data.model
           );
 
           for await (const event of stream as any) {
@@ -136,6 +141,34 @@ export class WebSocketConnection {
       this.active = false;
       this.session.flushHistory();
       (this.session as any) = null;
+    });
+  }
+
+  private sendConfig() {
+    this.sendMessage({
+      type: "config",
+      config: {
+        mcpServers: EXTERNAL_MCP_SERVERS_CONFIG,
+        defaultModel: process.env.DEFAULT_MODEL || "ollama/llama3.1",
+        supportedModels: (process.env.SUPPORTED_MODELS || "ollama/llama3.1,ollama/qwen2.5,ollama/mistral")
+          .split(",")
+          .map((model) => model.trim())
+          .filter(Boolean),
+        llmProvider: process.env.LLM_PROVIDER || "ollama",
+      },
+    });
+  }
+
+  private async handleMcpDiagnostics(data: WebSocketMessage) {
+    const selectedServers = data.mcpServers || [];
+    const diagnostics = await listExternalMcpServerDiagnostics(
+      selectedServers,
+      data.access_token || ""
+    );
+    this.sendMessage({
+      type: "mcp-diagnostics",
+      sessionId: data.session_id,
+      diagnostics,
     });
   }
 
@@ -275,22 +308,15 @@ export class WebSocketConnection {
   }
 
   private async verifyAuth(data: WebSocketMessage) {
-    if (!process.env.OPENROUTER_API_KEY) {
+    if ((process.env.LLM_PROVIDER || "ollama").toLowerCase() !== "ollama" && !process.env.OPENROUTER_API_KEY) {
       this.sendMessage({
         error:
-          "OpenRouter API Key is not set. Update .env file to have OPENROUTER_API_KEY=[YOUR_API_KEY]",
+          "LLM API Key is not set. Update .env to configure your provider credentials.",
       });
       return false;
     }
-    // Google ID token authentication
-    if (process.env.GOOGLE_CLIENT_ID) {
+    if (process.env.GOOGLE_CLIENT_ID && data.id_token && !data.access_token) {
       try {
-        if (!data.id_token) {
-          this.sendMessage({ error: "Missing Google ID token" });
-          this.ws.close && this.ws.close();
-          return;
-        }
-
         if (!this.user || !this.user.email) {
           this.user =
             (await verifyGoogleToken(data.id_token)) || ({} as TokenPayload);
@@ -300,7 +326,7 @@ export class WebSocketConnection {
           console.log("Authenticated user:", { name: this.user.name });
           (this.ws as any).user = this.user;
         }
-      } catch (err) {
+      } catch {
         this.sendMessage({ error: "Invalid Google ID token" });
         this.ws.close && this.ws.close();
         return false;

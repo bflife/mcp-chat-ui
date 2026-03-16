@@ -1,14 +1,20 @@
 import React, { Component } from "react";
 import type { ReactNode } from "react";
-import { Card, CardContent, CardTitle } from "../ui/card";
-import { setProfile } from "../../store/slices/profileSlice";
 import { connect } from "react-redux";
 import type { Dispatch } from "@reduxjs/toolkit";
 import Config from "@/const";
+import { clearProfile, setProfile } from "../../store/slices/profileSlice";
+import { Card, CardContent, CardTitle } from "../ui/card";
+import { Badge } from "../ui/badge";
+import LoginPage from "./LoginPage";
 
 const BASE_SERVER_URL =
   document.location.port === "5173" ? "http://localhost:3000" : "";
 const GOOGLE_CLIENT_ID = Config.GOOGLE_CLIENT_ID;
+const LOGIN_API_URL = Config.LOGIN_API_URL;
+const LOGIN_ENABLED = Config.LOGIN_ENABLED;
+const ACCESS_TOKEN_STORAGE_KEY = "accessToken";
+const AUTH_MODE_STORAGE_KEY = "authMode";
 
 const loadGoogleClient = () => {
   const scriptId = "google-identity-services";
@@ -30,7 +36,10 @@ interface GoogleAuthProps {
 
 interface GoogleAuthState {
   idToken: string | null;
+  accessToken: string | null;
   loading: boolean;
+  loginLoading: boolean;
+  loginError: string;
   accountInfo: {
     name?: string;
     email?: string;
@@ -51,13 +60,17 @@ class GoogleAuth extends Component<GoogleAuthProps, GoogleAuthState> {
     super(props);
     this.state = {
       idToken: null,
+      accessToken: null,
       loading: true,
+      loginLoading: false,
+      loginError: "",
       accountInfo: null,
       autoLoginTried: false,
     };
     this.tryAutoLogin = this.tryAutoLogin.bind(this);
     this.verifyToken = this.verifyToken.bind(this);
     this.handleLogin = this.handleLogin.bind(this);
+    this.handlePasswordLogin = this.handlePasswordLogin.bind(this);
     this.handleLogout = this.handleLogout.bind(this);
     this.scheduleTokenRefresh = this.scheduleTokenRefresh.bind(this);
     this.clearTokenRefresh = this.clearTokenRefresh.bind(this);
@@ -65,10 +78,31 @@ class GoogleAuth extends Component<GoogleAuthProps, GoogleAuthState> {
   }
 
   componentDidMount() {
+    const storedAccessToken = localStorage.getItem(ACCESS_TOKEN_STORAGE_KEY);
+    const authMode = localStorage.getItem(AUTH_MODE_STORAGE_KEY);
+    if (storedAccessToken && authMode === "password") {
+      this.setState({
+        accessToken: storedAccessToken,
+        loading: false,
+      });
+      this.props.dispatch(
+        setProfile({
+          name: "Password User",
+          email: "",
+          picture: "",
+          googleIdToken: "",
+          accessToken: storedAccessToken,
+          authType: "password",
+          noAuth: false,
+        })
+      );
+      return;
+    }
+
     const stored = localStorage.getItem("googleIdToken");
-    if (stored) {
+    if (stored && GOOGLE_CLIENT_ID) {
       this.verifyToken(stored);
-    } else {
+    } else if (GOOGLE_CLIENT_ID) {
       if (!this.state.autoLoginTried) {
         this.setState({ autoLoginTried: true }, () => {
           const scriptId = "google-identity-services";
@@ -84,6 +118,8 @@ class GoogleAuth extends Component<GoogleAuthProps, GoogleAuthState> {
       } else {
         this.setState({ loading: false });
       }
+    } else {
+      this.setState({ loading: false });
     }
   }
 
@@ -92,7 +128,6 @@ class GoogleAuth extends Component<GoogleAuthProps, GoogleAuthState> {
   }
 
   componentDidUpdate(_prevProps: GoogleAuthProps, prevState: GoogleAuthState) {
-    // When accountInfo is set, update profile in redux
     if (
       this.state.accountInfo &&
       this.state.accountInfo.name &&
@@ -106,15 +141,15 @@ class GoogleAuth extends Component<GoogleAuthProps, GoogleAuthState> {
           email: this.state.accountInfo.email,
           picture: this.state.accountInfo.picture || "",
           googleIdToken: this.state.idToken || "",
+          accessToken: "",
+          authType: "google",
           noAuth: false,
         })
       );
     }
-    // If idToken changed, schedule refresh
     if (this.state.idToken && this.state.idToken !== prevState.idToken) {
       this.scheduleTokenRefresh(this.state.idToken);
     }
-    // If logged out, clear refresh
     if (!this.state.idToken && prevState.idToken) {
       this.clearTokenRefresh();
     }
@@ -161,14 +196,13 @@ class GoogleAuth extends Component<GoogleAuthProps, GoogleAuthState> {
         if (decoded.exp) {
           exp = decoded.exp * 1000;
           const now = Date.now();
-          // If token expired or about to expire in 10s, refresh before validation
           if (exp - now < 10000) {
             this.refreshToken();
             return;
           }
         }
       } catch {
-        // ignore decode errors, proceed to validation
+        // ignore decode errors
       }
     }
 
@@ -180,17 +214,17 @@ class GoogleAuth extends Component<GoogleAuthProps, GoogleAuthState> {
       .then((res) => res.json())
       .then((data) => {
         if (data.success) {
-          this.setState({ idToken: token });
+          this.setState({ idToken: token, accessToken: null });
           localStorage.setItem("googleIdToken", token);
-          // Decode JWT to get account info and expiry
-          const payload = token.split(".")[1];
-          if (payload) {
+          localStorage.setItem(AUTH_MODE_STORAGE_KEY, "google");
+          localStorage.removeItem(ACCESS_TOKEN_STORAGE_KEY);
+          const googlePayload = token.split(".")[1];
+          if (googlePayload) {
             try {
               const decoded = JSON.parse(
-                atob(payload.replace(/-/g, "+").replace(/_/g, "/"))
+                atob(googlePayload.replace(/-/g, "+").replace(/_/g, "/"))
               );
               this.setState({ accountInfo: decoded });
-              // Set expiry for refresh
               if (decoded.exp) {
                 this.tokenExpiresAt = decoded.exp * 1000;
                 this.scheduleTokenRefresh(token);
@@ -220,9 +254,77 @@ class GoogleAuth extends Component<GoogleAuthProps, GoogleAuthState> {
       });
   }
 
+  async handlePasswordLogin(payload: {
+    username: string;
+    password: string;
+    grantType: string;
+    scope: string;
+    clientId: string;
+    clientSecret: string;
+  }) {
+    this.setState({ loginLoading: true, loginError: "" });
+    try {
+      const formData = new URLSearchParams();
+      formData.set("grant_type", payload.grantType);
+      formData.set("username", payload.username);
+      formData.set("password", payload.password);
+      formData.set("scope", payload.scope);
+      formData.set("client_id", payload.clientId);
+      formData.set("client_secret", payload.clientSecret);
+
+      const response = await fetch(LOGIN_API_URL, {
+        method: "POST",
+        headers: {
+          accept: "application/json",
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: formData.toString(),
+      });
+
+      const data = await response.json();
+      if (!response.ok || !data.access_token) {
+        throw new Error(data.detail || data.message || "登录失败");
+      }
+
+      localStorage.setItem(ACCESS_TOKEN_STORAGE_KEY, data.access_token);
+      localStorage.setItem(AUTH_MODE_STORAGE_KEY, "password");
+      localStorage.removeItem("googleIdToken");
+
+      this.setState({
+        accessToken: data.access_token,
+        idToken: null,
+        accountInfo: {
+          name: payload.username,
+          email: "",
+          picture: "",
+        },
+        loading: false,
+        loginLoading: false,
+        loginError: "",
+      });
+
+      this.props.dispatch(
+        setProfile({
+          name: payload.username,
+          email: "",
+          picture: "",
+          googleIdToken: "",
+          accessToken: data.access_token,
+          authType: "password",
+          noAuth: false,
+        })
+      );
+    } catch (error: any) {
+      this.setState({
+        loginLoading: false,
+        loading: false,
+        loginError: error?.message || "登录失败",
+      });
+    }
+  }
+
   scheduleTokenRefresh(token: string) {
     this.clearTokenRefresh();
-    // Decode expiry from token
     let exp = null;
     try {
       const payload = token.split(".")[1];
@@ -240,7 +342,6 @@ class GoogleAuth extends Component<GoogleAuthProps, GoogleAuthState> {
     if (!exp) return;
     const now = Date.now();
     const msToExpiry = exp - now;
-    // Refresh 1 minute before expiry, but not less than 10s from now
     const refreshIn = Math.max(msToExpiry - 60 * 1000, 10 * 1000);
     this.refreshTimer = setTimeout(this.refreshToken, refreshIn);
     this.tokenExpiresAt = exp;
@@ -255,12 +356,10 @@ class GoogleAuth extends Component<GoogleAuthProps, GoogleAuthState> {
   }
 
   refreshToken() {
-    // Use Google Identity Services to get a new token
     if (!window.google) {
       loadGoogleClient();
     }
     if (window.google && window.google.accounts && window.google.accounts.id) {
-      // Use prompt with auto_select to refresh silently
       window.google.accounts.id.initialize({
         client_id: GOOGLE_CLIENT_ID,
         callback: (response: { credential: string }): void => {
@@ -268,7 +367,6 @@ class GoogleAuth extends Component<GoogleAuthProps, GoogleAuthState> {
             this.setState({ loading: true });
             this.verifyToken(response.credential);
           } else {
-            // If failed, force logout
             this.handleLogout();
           }
         },
@@ -281,13 +379,11 @@ class GoogleAuth extends Component<GoogleAuthProps, GoogleAuthState> {
           isSkippedMoment: () => boolean;
         }) => {
           if (notification.isNotDisplayed() || notification.isSkippedMoment()) {
-            // If refresh fails, force logout
             this.handleLogout();
           }
         }
       );
     } else {
-      // If GIS not loaded, try again soon
       setTimeout(this.refreshToken, 1000);
     }
   }
@@ -303,38 +399,59 @@ class GoogleAuth extends Component<GoogleAuthProps, GoogleAuthState> {
       window.google.accounts.id.cancel();
     }
     this.clearTokenRefresh();
-    this.setState({ idToken: null });
+    this.setState({
+      idToken: null,
+      accessToken: null,
+      accountInfo: null,
+      loginError: "",
+    });
     localStorage.removeItem("googleIdToken");
-    this.setState({ accountInfo: null });
-    this.props.dispatch(
-      setProfile({
-        name: "",
-        email: "",
-        picture: "",
-        googleIdToken: "",
-        noAuth: false,
-      })
-    );
+    localStorage.removeItem(ACCESS_TOKEN_STORAGE_KEY);
+    localStorage.removeItem(AUTH_MODE_STORAGE_KEY);
+    this.props.dispatch(clearProfile());
   }
 
   render() {
-    const { loading, idToken, accountInfo } = this.state;
+    const {
+      loading,
+      idToken,
+      accessToken,
+      accountInfo,
+      loginLoading,
+      loginError,
+    } = this.state;
     const { children } = this.props;
     if (loading) {
       return (
         <div style={{ textAlign: "center", marginTop: "30vh" }}>Loading...</div>
       );
     }
-    if (!idToken) {
-      return <GoogleLogin onLogin={this.handleLogin} />;
+
+    if (!idToken && !accessToken) {
+      if (LOGIN_ENABLED && LOGIN_API_URL) {
+        return (
+          <LoginPage
+            loginApiUrl={LOGIN_API_URL}
+            loading={loginLoading}
+            error={loginError}
+            llmProvider={Config.LLM_PROVIDER}
+            defaultModel={Config.DEFAULT_MODEL}
+            ollamaBaseUrl={Config.OLLAMA_BASE_URL}
+            onSubmit={this.handlePasswordLogin}
+          />
+        );
+      }
+      if (GOOGLE_CLIENT_ID) {
+        return <GoogleLogin onLogin={this.handleLogin} />;
+      }
     }
+
     return (
       <>
         {typeof children === "object"
-          ? // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            React.cloneElement(children as any, {
+          ? React.cloneElement(children as any, {
               handleLogout: this.handleLogout,
-              googleIdToken: idToken,
+              googleIdToken: idToken || accessToken || "",
               googleAccountProfile: accountInfo,
             })
           : children}
@@ -378,10 +495,19 @@ class GoogleLogin extends Component<{ onLogin: (token: string) => void }> {
 
   render() {
     return (
-      <Card className="absolute left-1/2 top-1/2 w-[20vw] h-[18vh] -translate-x-1/2 -translate-y-1/2  p-6 border-1 flex flex-col items-center justify-center">
+      <Card className="absolute left-1/2 top-1/2 min-w-[320px] -translate-x-1/2 -translate-y-1/2 p-6 border-1 flex flex-col items-center justify-center gap-4">
         <CardTitle className="text-2xl">Chat MCP</CardTitle>
-        <CardContent className="flex flex-col items-center justify-center">
+        <div className="flex flex-wrap items-center justify-center gap-2 text-sm text-muted-foreground">
+          <Badge variant="outline">{Config.LLM_PROVIDER || "ollama"}</Badge>
+          <span>{Config.DEFAULT_MODEL || "ollama/llama3.1"}</span>
+        </div>
+        <CardContent className="flex flex-col items-center justify-center gap-3">
           <div id="google-signin-btn" />
+          {(Config.LLM_PROVIDER || "ollama").toLowerCase() === "ollama" ? (
+            <div className="max-w-[320px] text-center text-xs text-muted-foreground break-all">
+              Ollama 地址：{Config.OLLAMA_BASE_URL || "http://127.0.0.1:11434/v1"}
+            </div>
+          ) : null}
         </CardContent>
       </Card>
     );

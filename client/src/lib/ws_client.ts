@@ -8,9 +8,14 @@ import {
   setChatSession,
   setConnected,
   setMCPServers,
+  setMcpDiagnostics,
+  setModelConfig,
+  setSelectedMcpServers,
+  setToolCallOutput,
   updateLastResponse,
   type ChatSessionState,
   type ImageResponseData,
+  type MCPServerDescriptor,
 } from "@/store/slices/chatSessionSlice";
 
 const WS_URL =
@@ -19,8 +24,9 @@ const WS_URL =
     : `ws://${location.host.split(":")[0]}:3000/client-ws`;
 
 export class WebSocketSessionClient {
-  public model = "anthropic/claude-3.5-sonnet";
+  public model = "ollama/llama3.1";
   public googleIdToken: string;
+  public accessToken: string = "";
   public sessionId = "ws-" + Math.random().toString(36).substring(2, 15);
   public connected: boolean = false;
   public onUpdate: (() => void) | null = null;
@@ -55,6 +61,14 @@ export class WebSocketSessionClient {
     this.dispatch(setChatSession(part));
   }
 
+  setAccessToken(token: string) {
+    this.accessToken = token;
+  }
+
+  setModel(model: string) {
+    this.model = model;
+  }
+
   initWebSocket() {
     console.log("Connecting to WebSocket server...");
     this.ws = new WebSocket(this.url);
@@ -80,7 +94,6 @@ export class WebSocketSessionClient {
     };
 
     this.ws.onmessage = (event) => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       let data = {} as any;
       let updated = false;
 
@@ -93,6 +106,11 @@ export class WebSocketSessionClient {
 
       if (data.config) {
         this.processConfig(data);
+      }
+
+      if (data.type === "mcp-diagnostics") {
+        this.dispatch(setMcpDiagnostics(data.diagnostics || {}));
+        updated = true;
       }
 
       if (data.delta && !data.tool) {
@@ -109,10 +127,7 @@ export class WebSocketSessionClient {
             type: "text",
           };
         }
-        this.dispatch(
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          addToolCall(data.tool as any)
-        );
+        this.dispatch(addToolCall(data.tool as any));
         updated = true;
       }
 
@@ -133,6 +148,14 @@ export class WebSocketSessionClient {
             : [],
           tool: data.toolOutput,
         };
+
+        this.dispatch(
+          setToolCallOutput({
+            id: data.id,
+            tool: data.toolOutput,
+            output: data.output,
+          })
+        );
 
         if (data.toolOutput === "data_chart_generator") {
           this.dispatch(addChartItem(data));
@@ -220,6 +243,24 @@ export class WebSocketSessionClient {
 
   setMCPServers(servers: string[]) {
     this.mcpServers = servers;
+    this.dispatch(setSelectedMcpServers(servers));
+  }
+
+  async requestMcpDiagnostics(serverIds?: string[]) {
+    if (!this.ws || !this.connected) {
+      this.initWebSocket();
+    }
+    await this.waitForReadyState();
+
+    this.ws?.send(
+      JSON.stringify({
+        type: "mcp-diagnostics",
+        session_id: this.sessionId,
+        mcpServers: serverIds || this.mcpServers,
+        id_token: this.googleIdToken || "",
+        access_token: this.accessToken || "",
+      })
+    );
   }
 
   async send(message: string) {
@@ -240,23 +281,38 @@ export class WebSocketSessionClient {
         instructions: "",
         mcpServers: this.mcpServers,
         id_token: this.googleIdToken || "",
+        access_token: this.accessToken || "",
       })
     );
 
     this.notifyUpdate();
   }
 
-  processConfig(data: { config: { mcpServers: { [key: string]: string } } }) {
+  processConfig(data: {
+    config: {
+      mcpServers: Record<string, MCPServerDescriptor>;
+      defaultModel?: string;
+      supportedModels?: string[];
+      llmProvider?: string;
+    };
+  }) {
     this.dispatch(
       setMCPServers(
-        Object.keys(data.config.mcpServers || {}).map((key) => {
-          return {
-            id: key,
-            title: data.config.mcpServers[key],
-          };
-        })
+        Object.keys(data.config.mcpServers || {}).map((key) => ({
+          ...data.config.mcpServers[key],
+          id: key,
+        }))
       )
     );
+    this.dispatch(
+      setModelConfig({
+        defaultModel: data.config.defaultModel || "ollama/llama3.1",
+        supportedModels:
+          data.config.supportedModels || ["ollama/llama3.1"],
+        llmProvider: data.config.llmProvider || "ollama",
+      })
+    );
+    this.model = data.config.defaultModel || this.model;
   }
 
   disconnect() {

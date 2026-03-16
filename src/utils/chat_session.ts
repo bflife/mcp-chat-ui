@@ -10,12 +10,29 @@ import { AgentsHelper } from "./agents_helper";
 import SystemPrompt from "../instructions/system_prompt";
 import codingAgentInstructions from "../instructions/coding_agent_instructions";
 import { now } from "./index";
-import { loadExternalMcpServers } from "./external_mcp";
+import {
+  createExternalMcpServerInstance,
+  loadExternalMcpServers,
+} from "./external_mcp";
 
 const TOOL_RESPONSE_PURGE_THRESHOLD = 1024 * 3;
+const DEFAULT_MODEL = process.env.DEFAULT_MODEL || "ollama/llama3.1";
+const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || "http://127.0.0.1:11434/v1";
+const LLM_PROVIDER = (process.env.LLM_PROVIDER || "ollama").toLowerCase();
 
-const EXTERNAL_MCP_SERVERS = loadExternalMcpServers() as {
-  [s: string]: MCPServer;
+loadExternalMcpServers();
+
+const createOpenAIClient = () => {
+  if (LLM_PROVIDER === "ollama") {
+    return new OpenAI({
+      apiKey: process.env.OLLAMA_API_KEY || "ollama",
+      baseURL: OLLAMA_BASE_URL,
+    });
+  }
+  return new OpenAI({
+    apiKey: process.env.OPENROUTER_API_KEY,
+    baseURL: process.env.OPENROUTER_API_BASE_URL,
+  });
 };
 
 const myMCPServer = new MCPServerStreamableHttp({
@@ -47,7 +64,7 @@ const myMCPServer = new MCPServerStreamableHttp({
     },
     tokens: () => {
       return {
-        access_token: "DEV_ACCESS_TOKEN",
+        access_token: process.env.DEV_ACCESS_TOKEN || "DEV_ACCESS_TOKEN",
         expires_in: 360000000000,
         token_type: "Bearer",
       };
@@ -63,24 +80,18 @@ export class ChatSession {
     public userId: string = "",
     public createdAt: Date = new Date(),
     public updatedAt: Date = new Date(),
+    public sessionAccessToken: string = "",
+    public selectedModel: string = DEFAULT_MODEL,
 
-    public openai = new OpenAI({
-      apiKey: process.env.OPENROUTER_API_KEY,
-      baseURL: process.env.OPENROUTER_API_BASE_URL,
-    }),
+    public openai = createOpenAIClient(),
 
-    public modelSonnet = new OpenAIChatCompletionsModel(
+    public modelPrimary = new OpenAIChatCompletionsModel(
       openai,
-      "anthropic/claude-3.5-sonnet"
-    ),
-
-    public modelGPT4o = new OpenAIChatCompletionsModel(
-      openai,
-      "openai/gpt-4o"
+      selectedModel
     ),
 
     public codingAgent = new Agent({
-      model: modelSonnet,
+      model: modelPrimary,
       name: "Coding AI Agent",
       instructions: codingAgentInstructions,
       handoffDescription:
@@ -88,14 +99,10 @@ export class ChatSession {
     }),
 
     public genericAgent = new Agent({
-      model: modelSonnet,
+      model: modelPrimary,
       name: "Generic AI Agent",
       instructions: SystemPrompt.replace(/\%\%NOW\%\%/gi, now()),
-      mcpServers: ([myMCPServer] as MCPServer[]).concat(
-        Object.keys(EXTERNAL_MCP_SERVERS).map(
-          (key) => EXTERNAL_MCP_SERVERS[key] as MCPServer
-        )
-      ),
+      mcpServers: [myMCPServer] as MCPServer[],
       handoffs: [codingAgent],
       modelSettings: {
         parallelToolCalls: false,
@@ -105,6 +112,17 @@ export class ChatSession {
 
   update() {
     this.updatedAt = new Date();
+  }
+
+  setAccessToken(token: string) {
+    this.sessionAccessToken = token;
+  }
+
+  setModel(model: string) {
+    this.selectedModel = model || DEFAULT_MODEL;
+    this.modelPrimary = new OpenAIChatCompletionsModel(this.openai, this.selectedModel);
+    this.codingAgent.model = this.modelPrimary;
+    this.genericAgent.model = this.modelPrimary;
   }
 
   addHistory(item: AgentInputItem) {
@@ -158,12 +176,24 @@ export class ChatSession {
     this.update();
   }
 
-  async startStream(prompt: string | AgentInputItem[], mcpServers: string[]) {
-    this.genericAgent.mcpServers = [myMCPServer].concat(
-      mcpServers
-        .map((id) => EXTERNAL_MCP_SERVERS[id] || null)
-        .filter(Boolean) as any
-    );
+  async startStream(
+    prompt: string | AgentInputItem[],
+    mcpServers: string[],
+    accessToken?: string,
+    model?: string
+  ) {
+    if (accessToken) {
+      this.setAccessToken(accessToken);
+    }
+    if (model) {
+      this.setModel(model);
+    }
+
+    const dynamicServers = mcpServers
+      .map((id) => createExternalMcpServerInstance(id, this.sessionAccessToken))
+      .filter(Boolean) as MCPServer[];
+
+    this.genericAgent.mcpServers = [myMCPServer].concat(dynamicServers);
     return await AgentsHelper.stream(this.genericAgent, prompt);
   }
 }

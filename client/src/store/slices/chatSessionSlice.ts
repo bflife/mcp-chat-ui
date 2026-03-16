@@ -9,6 +9,53 @@ export interface ImageResponseData {
   mimeType: string;
 }
 
+export interface MCPServerDescriptor {
+  id: string;
+  title: string;
+  description: string;
+  transport: "stdio" | "streamable-http" | "sse";
+  url?: string;
+  command?: string;
+  args?: string[];
+  auth?: {
+    type: "bearer";
+    configured: boolean;
+    sessionTokenEnabled: boolean;
+  };
+}
+
+export interface MCPToolDescriptor {
+  name: string;
+  description: string;
+  inputSchema: {
+    type: "object";
+    properties: Record<string, unknown>;
+    required: string[];
+    additionalProperties: boolean;
+  };
+  category: "system" | "generic" | "business";
+}
+
+export interface MCPServerDiagnostics {
+  connected: boolean;
+  status: "connected" | "failed";
+  checkedAt: number;
+  latencyMs: number;
+  error?: string;
+  tools: MCPToolDescriptor[];
+}
+
+export interface ToolCallLogEntry {
+  id: string;
+  tool: string;
+  args: string;
+  startedAt?: number;
+  finishedAt?: number;
+  runtime?: string;
+  success?: boolean;
+  output?: unknown;
+}
+
 export interface AgentResponse {
   text: string;
   id?: string;
@@ -19,7 +66,6 @@ export interface AgentResponse {
   arguments?: string;
   runtime?: string;
   image?: ImageResponseData;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   json?: Record<string, any>;
   html?: ImageResponseData;
 }
@@ -37,7 +83,14 @@ export interface ChatSessionState {
   templateId: number;
   prompt: string;
   toolResponseId: string;
-  mcpServers: { id: string; title: string }[];
+  mcpServers: MCPServerDescriptor[];
+  selectedMcpServerIds: string[];
+  mcpDiagnostics: Record<string, MCPServerDiagnostics>;
+  toolCallLog: ToolCallLogEntry[];
+  defaultModel: string;
+  selectedModel: string;
+  supportedModels: string[];
+  llmProvider: string;
 }
 
 const initialState: ChatSessionState = {
@@ -49,6 +102,13 @@ const initialState: ChatSessionState = {
   prompt: "",
   toolResponseId: "",
   mcpServers: [],
+  selectedMcpServerIds: [],
+  mcpDiagnostics: {},
+  toolCallLog: [],
+  defaultModel: "ollama/llama3.1",
+  selectedModel: "ollama/llama3.1",
+  supportedModels: ["ollama/llama3.1"],
+  llmProvider: "ollama",
 };
 
 const chatSessionSlice = createSlice({
@@ -116,9 +176,10 @@ const chatSessionSlice = createSlice({
       action: PayloadAction<{
         sessionId: string;
         id: string;
-        name: string;
+        name?: string;
         timestamp: number;
-        arguments: string;
+        arguments?: string;
+        finished?: boolean;
       }>
     ) {
       const item = state.items.find(
@@ -141,6 +202,8 @@ const chatSessionSlice = createSlice({
             prompt: "",
             response: {
               ...action.payload,
+              name: action.payload.name,
+              arguments: action.payload.arguments,
               text: `[tool_call]`,
               started: true,
               finished: false,
@@ -154,6 +217,57 @@ const chatSessionSlice = createSlice({
           }
         );
       }
+
+      const existingLog = state.toolCallLog.find(
+        (entry) => entry.id === action.payload.id
+      );
+      if (existingLog) {
+        existingLog.finishedAt = action.payload.finished
+          ? action.payload.timestamp
+          : existingLog.finishedAt;
+        existingLog.runtime = item?.response.runtime || existingLog.runtime;
+      } else {
+        state.toolCallLog.unshift({
+          id: action.payload.id,
+          tool: action.payload.name || "Unknown tool",
+          args: action.payload.arguments || "{}",
+          startedAt: action.payload.timestamp,
+        });
+      }
+    },
+    setToolCallOutput(
+      state,
+      action: PayloadAction<{
+        id: string;
+        tool: string;
+        output: unknown;
+      }>
+    ) {
+      const existingLog = state.toolCallLog.find(
+        (entry) => entry.id === action.payload.id
+      );
+      const success = !(
+        typeof action.payload.output === "object" &&
+        action.payload.output &&
+        "error" in (action.payload.output as Record<string, unknown>)
+      );
+      if (existingLog) {
+        existingLog.output = action.payload.output;
+        existingLog.tool = action.payload.tool;
+        existingLog.success = success;
+        if (!existingLog.finishedAt) {
+          existingLog.finishedAt = Date.now();
+        }
+      } else {
+        state.toolCallLog.unshift({
+          id: action.payload.id,
+          tool: action.payload.tool,
+          args: "{}",
+          finishedAt: Date.now(),
+          success,
+          output: action.payload.output,
+        });
+      }
     },
     setTokens(state, action: PayloadAction<number>) {
       state.tokens = action.payload;
@@ -165,7 +279,6 @@ const chatSessionSlice = createSlice({
       state.items.push(action.payload);
     },
     updateLastResponse(state, action: PayloadAction<string>) {
-      // const index = state.items.length - 1;
       let index = -1;
       for (let i = state.items.length - 1; i >= 0; i--) {
         if (
@@ -195,11 +308,35 @@ const chatSessionSlice = createSlice({
     showToolResponse(state, action: PayloadAction<string>) {
       state.toolResponseId = action.payload;
     },
-    setMCPServers(
-      state,
-      action: PayloadAction<{ id: string; title: string }[]>
-    ) {
+    setMCPServers(state, action: PayloadAction<MCPServerDescriptor[]>) {
       state.mcpServers = action.payload;
+    },
+    setSelectedMcpServers(state, action: PayloadAction<string[]>) {
+      state.selectedMcpServerIds = action.payload;
+    },
+    setMcpDiagnostics(
+      state,
+      action: PayloadAction<Record<string, MCPServerDiagnostics>>
+    ) {
+      state.mcpDiagnostics = action.payload;
+    },
+    setModelConfig(
+      state,
+      action: PayloadAction<{
+        defaultModel: string;
+        supportedModels: string[];
+        llmProvider: string;
+      }>
+    ) {
+      state.defaultModel = action.payload.defaultModel;
+      state.supportedModels = action.payload.supportedModels;
+      state.llmProvider = action.payload.llmProvider;
+      if (!state.selectedModel) {
+        state.selectedModel = action.payload.defaultModel;
+      }
+    },
+    setSelectedModel(state, action: PayloadAction<string>) {
+      state.selectedModel = action.payload;
     },
     setChatSession(state, action: PayloadAction<Partial<ChatSessionState>>) {
       state.tokens =
@@ -218,6 +355,22 @@ const chatSessionSlice = createSlice({
         typeof action.payload.connected === "undefined"
           ? state.connected
           : action.payload.connected;
+      state.selectedMcpServerIds =
+        typeof action.payload.selectedMcpServerIds === "undefined"
+          ? state.selectedMcpServerIds
+          : action.payload.selectedMcpServerIds;
+      state.mcpDiagnostics =
+        typeof action.payload.mcpDiagnostics === "undefined"
+          ? state.mcpDiagnostics
+          : action.payload.mcpDiagnostics;
+      state.toolCallLog =
+        typeof action.payload.toolCallLog === "undefined"
+          ? state.toolCallLog
+          : action.payload.toolCallLog;
+      state.selectedModel =
+        typeof action.payload.selectedModel === "undefined"
+          ? state.selectedModel
+          : action.payload.selectedModel;
     },
   },
 });
@@ -231,11 +384,16 @@ export const {
   updateLastResponse,
   addItem,
   addToolCall,
+  setToolCallOutput,
   setTemplateId,
   setPrompt,
   showToolResponse,
   addChartItem,
   setMCPServers,
+  setSelectedMcpServers,
+  setMcpDiagnostics,
+  setModelConfig,
+  setSelectedModel,
   addImageItem,
   addHTMLItem,
 } = chatSessionSlice.actions;
