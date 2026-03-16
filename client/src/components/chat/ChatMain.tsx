@@ -10,12 +10,16 @@ import type { RootState } from "@/store";
 import {
   showToolResponse,
   type ChatItem,
+  type MCPServerDiagnostics,
+  type ToolCallLogEntry,
 } from "@/store/slices/chatSessionSlice";
-import { CardTitle } from "../ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "../ui/card";
 import { ChatScrollToBottom } from "./ChatScrollToBottom";
 import ChatToolResponse from "./ChatToolResponse";
 import { LOCAL_STORAGE_KEY } from "./ChatMCPSelector";
 import { parseJSON } from "@/lib/utils";
+import { Badge } from "../ui/badge";
+import { ScrollText, ShieldCheck } from "lucide-react";
 
 interface ChatMainState {
   scroll: "auto" | "manual";
@@ -33,6 +37,8 @@ interface ChatMainProps {
   username?: string;
   toolResponseId?: string;
   noAuth?: boolean;
+  mcpDiagnostics?: Record<string, MCPServerDiagnostics>;
+  toolCallLog?: ToolCallLogEntry[];
 }
 
 class ChatMain extends Component<ChatMainProps, ChatMainState> {
@@ -56,6 +62,12 @@ class ChatMain extends Component<ChatMainProps, ChatMainState> {
         this.pushScrollToBottom(true);
       };
       document.body.addEventListener("keydown", this.onF1.bind(this));
+
+      const selected = parseJSON(localStorage.getItem(LOCAL_STORAGE_KEY) || "[]");
+      this.chatSession.setMCPServers(Array.isArray(selected) ? selected : []);
+      if (Array.isArray(selected) && selected.length > 0) {
+        this.chatSession.requestMcpDiagnostics(selected);
+      }
     }
   }
 
@@ -137,6 +149,95 @@ class ChatMain extends Component<ChatMainProps, ChatMainState> {
     this.handleSend(`Fix Errors: ${uniqueErrors.join(", ")}`);
   };
 
+  handleMcpSelectionChange = (ids: string[]) => {
+    this.chatSession?.setMCPServers(ids);
+  };
+
+  handleRefreshDiagnostics = (ids: string[]) => {
+    this.chatSession?.requestMcpDiagnostics(ids);
+  };
+
+  renderDiagnosticsPanel() {
+    const diagnostics = Object.entries(this.props.mcpDiagnostics || {});
+    if (diagnostics.length === 0) {
+      return null;
+    }
+
+    return (
+      <Card className="mt-4 py-4 gap-3">
+        <CardHeader className="px-4 pb-0">
+          <CardTitle className="text-base flex items-center gap-2">
+            <ShieldCheck className="h-4 w-4" /> 安全策略与诊断总览
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="px-4 pt-0 grid md:grid-cols-2 gap-3">
+          {diagnostics.map(([serverId, diagnostic]) => (
+            <div key={serverId} className="rounded-lg border p-3 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <div className="font-medium">{serverId}</div>
+                <Badge variant={diagnostic.status === "connected" ? "default" : "destructive"}>
+                  {diagnostic.status === "connected" ? "健康" : "异常"}
+                </Badge>
+              </div>
+              <div className="text-sm text-muted-foreground">
+                最近检测: {new Date(diagnostic.checkedAt).toLocaleTimeString()}
+              </div>
+              <div className="text-sm text-muted-foreground">
+                延迟: {diagnostic.latencyMs} ms · 工具数: {diagnostic.tools.length}
+              </div>
+              {diagnostic.error ? (
+                <div className="text-sm text-destructive">{diagnostic.error}</div>
+              ) : (
+                <div className="text-sm text-muted-foreground">
+                  已获取工具清单，可用于 health / security_policy / smoke_test 可视化。
+                </div>
+              )}
+            </div>
+          ))}
+        </CardContent>
+      </Card>
+    );
+  }
+
+  renderToolLogPanel() {
+    const log = this.props.toolCallLog || [];
+    if (log.length === 0) {
+      return null;
+    }
+
+    return (
+      <Card className="mt-4 py-4 gap-3">
+        <CardHeader className="px-4 pb-0">
+          <CardTitle className="text-base flex items-center gap-2">
+            <ScrollText className="h-4 w-4" /> Tool Call 日志
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="px-4 pt-0 space-y-2 max-h-[240px] overflow-auto">
+          {log.slice(0, 10).map((entry) => (
+            <div key={entry.id} className="rounded-lg border p-3 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <div className="font-medium text-sm">{entry.tool}</div>
+                <div className="flex items-center gap-2">
+                  {typeof entry.success === "boolean" ? (
+                    <Badge variant={entry.success ? "default" : "destructive"}>
+                      {entry.success ? "成功" : "失败"}
+                    </Badge>
+                  ) : (
+                    <Badge variant="outline">执行中</Badge>
+                  )}
+                  {entry.runtime ? <Badge variant="outline">{entry.runtime}s</Badge> : null}
+                </div>
+              </div>
+              <div className="text-xs text-muted-foreground break-all">
+                参数: {entry.args}
+              </div>
+            </div>
+          ))}
+        </CardContent>
+      </Card>
+    );
+  }
+
   render() {
     const brief = this.state.brief;
     return (
@@ -144,6 +245,8 @@ class ChatMain extends Component<ChatMainProps, ChatMainState> {
         handleLogout={this.props.noAuth ? undefined : this.props.handleLogout}
         tokens={this.props.tokens}
         onPromptSelected={this.handlePromptSelected}
+        onMcpSelectionChange={this.handleMcpSelectionChange}
+        onRefreshDiagnostics={this.handleRefreshDiagnostics}
       >
         {!brief ? (
           <ScrollArea
@@ -182,6 +285,12 @@ class ChatMain extends Component<ChatMainProps, ChatMainState> {
             disabled={this.props.sending === true}
           />
         </div>
+        {!brief && (
+          <div className="grid xl:grid-cols-2 gap-4 mt-4">
+            {this.renderDiagnosticsPanel()}
+            {this.renderToolLogPanel()}
+          </div>
+        )}
         {brief && (
           <div className="text-center text-muted-foreground h-[41vh] flex items-center justify-center"></div>
         )}
@@ -241,6 +350,8 @@ const mapStateToProps = (state: RootState) => ({
   username: state.profile.name.split(" ")[0] || "",
   toolResponseId: state.chatSession.toolResponseId || "",
   noAuth: state.profile.noAuth,
+  mcpDiagnostics: state.chatSession.mcpDiagnostics,
+  toolCallLog: state.chatSession.toolCallLog,
 });
 
 export default connect(mapStateToProps)(ChatMain);

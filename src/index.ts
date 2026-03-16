@@ -20,6 +20,16 @@ app.use(authGoogleRouter);
 
 app.use(bodyParser.urlencoded({ extended: true }));
 app.post("/webserver", localHtmlPageRenderer);
+app.get("/app-config.js", (_req, res) => {
+  res.type("application/javascript").send(`window.__APP_CONFIG__ = {
+    GOOGLE_CLIENT_ID: ${JSON.stringify(process.env.GOOGLE_CLIENT_ID || "")},
+    LOGIN_API_URL: ${JSON.stringify(process.env.LOGIN_API_URL || "")},
+    LOGIN_ENABLED: ${JSON.stringify(process.env.LOGIN_ENABLED === "true")},
+    LLM_PROVIDER: ${JSON.stringify(process.env.LLM_PROVIDER || "ollama")},
+    OLLAMA_BASE_URL: ${JSON.stringify(process.env.OLLAMA_BASE_URL || "http://127.0.0.1:11434/v1")},
+    DEFAULT_MODEL: ${JSON.stringify(process.env.DEFAULT_MODEL || "ollama/llama3.1")}
+  };`);
+});
 
 app.use("/", express.static(path.join(__dirname, "../client/dist")));
 

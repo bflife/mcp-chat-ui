@@ -32,6 +32,10 @@ coverage/
 *.swp
 *.swo
 
+# Local release bundles
+!dist/
+dist/*.tar.gz
+
 # Local config
 *.local.js
 *.local.ts
